@@ -1,0 +1,15 @@
+{
+    global:
+        LINKTABLENAMES;
+        LINKTABLEVALUES;
+        METADATAVALUES;
+        Environment;
+        EXTENSIONVERSION;
+        _xovi_construct;
+        _xovi_depconstruct;
+        _xovi_shouldLoad;
+        xovi_content_inserter_put;
+        xovi_content_inserter_capabilities;
+    local:
+        *;
+};

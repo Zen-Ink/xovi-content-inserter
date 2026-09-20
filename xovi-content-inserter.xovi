@@ -1,0 +1,27 @@
+version 0.1.7
+
+depends-on xovi-message-broker:0.2.0
+
+global-meta
+    id = "xovi-content-inserter"
+    name = "XOVI Content Inserter"
+    description = "Receive text or images through xovi-message-broker and place them on the clipboard or current notebook page"
+    requiresXovi = ">=0.2.0"
+    requiresExtensions = "xovi-message-broker:>=0.2.0"
+    license = "GPL-3.0-only"
+    architectures = "aarch64,arm"
+    xochitlVersions = "3.27.x.x,3.28.x.x"
+    entry = "xovi-content-inserter.so"
+end
+
+export xovi_content_inserter_put
+with
+    xovi-message-broker$simpleSignal = "xovi-content-inserter$put"
+    xovi-message-broker$version = 1
+end
+
+export xovi_content_inserter_capabilities
+with
+    xovi-message-broker$simpleSignal = "xovi-content-inserter$capabilities"
+    xovi-message-broker$version = 1
+end
