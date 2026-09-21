@@ -30,7 +30,7 @@ timeout 10 cat /run/xovi-mb-out &
 printf '%s\n' '>exovi-content-inserter$put:{"target":"current-page","type":"text","text":"Meeting notes","coordinateSpace":"normalized","x":0.2,"y":0.3}' > /run/xovi-mb
 ```
 
-Normalized coordinates use the logical notebook page bounds: `(0,0)` is the
+Normalized text coordinates use the initial logical notebook page bounds: `(0,0)` is the
 top-left and `(1,1)` is the bottom-right. `coordinateSpace:"scene"` accepts
 xochitl scene coordinates directly. If the page has no typed-text root, the
 extension asks `SceneController` to create one before focusing and pasting.
@@ -40,6 +40,22 @@ The same operation accepts `"path":"/tmp/notes.txt"` in place of the inline
 Every text request must contain exactly one of `text` or `path`. UTF-8 files
 with or without a BOM are supported; an empty file or invalid UTF-8 produces a
 structured error response.
+
+### Native placement geometry
+
+Capabilities include `scenePage.bounds` (`x`, `y`, `width`, `height`) and
+`scenePage.boundsSource`. Native insertion and preview use the active scene
+view’s `sceneExteriorBoundary` (also exposed as `exteriorBoundary`). Only a
+visible view bound to the active page controller is accepted. On older firmware
+without these properties, the union of `paperNoteBounds`, `defaultNoteBounds`
+and the content `boundingRect` is used, so extended content is not excluded.
+The initial `paperNoteBounds` alone may end above the actual page bottom.
+The `canvas` field
+is the screen canvas used for editable ink; it is not the native scene paper.
+Native previews should use the aspect ratio of `scenePage.bounds` when present.
+The native insertion response also reports `geometry` and the mapped
+`scenePosition`. These describe the requested insertion point, not the final
+asynchronously created image item's extent or bottom-edge alignment.
 
 ### Insert a native image into the current page
 
@@ -51,8 +67,9 @@ printf '%s\n' '>exovi-content-inserter$put:{"target":"current-page","type":"imag
 `scene-image` is the default. It calls xochitl's native
 `SceneController.insertImageFileAsSceneItem()` API, so the result is a native
 image SceneItem that can be moved and resized with the selection tool. Its
-coordinates are the insertion point in normalized page bounds or direct scene
-coordinates. The native API chooses the initial image size.
+coordinates are the insertion point in normalized full-page scene bounds or
+direct scene coordinates. The bottom edge maps to `bounds.y + bounds.height`;
+this positions the insertion point, not the bottom edge of the resulting image. The native API chooses the initial image size.
 
 The request's `representation` selects the mode; image content or format does
 not select it automatically. A failed `scene-image` request returns an error

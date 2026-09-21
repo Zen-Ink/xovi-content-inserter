@@ -13,6 +13,7 @@
 #include <QQuickItem>
 #include <QQuickWindow>
 #include <QScreen>
+#include <QRectF>
 #include <QSet>
 #include <QSysInfo>
 #include <QSvgRenderer>
@@ -137,6 +138,7 @@ import com.remarkable
 
 QtObject {
     property var sceneController: null
+    property var nativeImageBounds: null
 
     function insertText(value, x, y, coordinateSpace) {
         const controller = sceneController
@@ -179,11 +181,7 @@ QtObject {
         try {
             let position = Qt.point(x, y)
             if (coordinateSpace === "normalized") {
-                let bounds = controller.paperNoteBounds
-                if (!bounds || bounds.width <= 0 || bounds.height <= 0)
-                    bounds = controller.defaultNoteBounds
-                if (!bounds || bounds.width <= 0 || bounds.height <= 0)
-                    bounds = controller.boundingRect
+                const bounds = nativeImageBounds
                 if (!bounds || bounds.width <= 0 || bounds.height <= 0)
                     return "page-bounds-unavailable"
                 position = Qt.point(bounds.x + x * bounds.width,
@@ -284,6 +282,52 @@ struct ActivePageContext {
     QObject *controller = nullptr;
     QString pageId;
 };
+
+// Read the same scene bounds used by normalized native insertion. Screen
+// dimensions are a separate coordinate space, especially on Paper Pro Move.
+QJsonObject nativePageGeometry(QObject *controller)
+{
+    QJsonObject result;
+    if (!controller)
+        return result;
+    const auto valid = [](const QRectF &rect) {
+        return rect.isValid() && std::isfinite(rect.x()) && std::isfinite(rect.y()) &&
+            std::isfinite(rect.width()) && std::isfinite(rect.height());
+    };
+    const auto jsonRect = [](const QRectF &rect) {
+        return QJsonObject{{"x", rect.x()}, {"y", rect.y()},
+                           {"width", rect.width()}, {"height", rect.height()}};
+    };
+    QRectF fallback;
+    for (const char *name : {"paperNoteBounds", "defaultNoteBounds", "boundingRect"}) {
+        const QRectF rect = controller->property(name).toRectF();
+        if (!valid(rect))
+            continue;
+        result.insert(QString::fromLatin1(name), jsonRect(rect));
+        fallback = fallback.isValid() ? fallback.united(rect) : rect;
+    }
+    // DeviceSceneView exposes SceneView.sceneExteriorBoundary as exteriorBoundary.
+    // Bind to the current controller, never a retained or hidden document view.
+    for (QObject *object : runtimeObjects()) {
+        if (!isVisibleObject(object) || controllerProperty(object, "controller") != controller)
+            continue;
+        for (const char *name : {"sceneExteriorBoundary", "exteriorBoundary"}) {
+            const QRectF rect = object->property(name).toRectF();
+            if (!valid(rect))
+                continue;
+            result.insert("bounds", jsonRect(rect));
+            result.insert("boundsSource", QString::fromLatin1(name));
+            return result;
+        }
+    }
+    // Older firmware without SceneView bounds still needs the entire page,
+    // including content extending beyond the initial paper rectangle.
+    if (valid(fallback)) {
+        result.insert("bounds", jsonRect(fallback));
+        result.insert("boundsSource", "paperAndContentUnion");
+    }
+    return result;
+}
 
 ActivePageContext contextFromDocumentView(QObject *documentView)
 {
@@ -448,6 +492,7 @@ QJsonObject insertSceneImage(const QJsonObject &request)
     QString operationResult;
     QString helperError;
     QString pageId;
+    QJsonObject geometry;
     const bool dispatched = runOnGuiSync([&]() {
         const ActivePageContext context = findActivePage();
         if (!context.controller) {
@@ -455,12 +500,14 @@ QJsonObject insertSceneImage(const QJsonObject &request)
             return;
         }
         pageId = context.pageId;
+        geometry = nativePageGeometry(context.controller);
         QObject *helper = ensureHelper(&helperError);
         if (!helper) {
             operationResult = "helper-unavailable";
             return;
         }
         helper->setProperty("sceneController", QVariant::fromValue(context.controller));
+        helper->setProperty("nativeImageBounds", geometry.value("bounds").toObject().toVariantMap());
         QVariant result;
         if (!QMetaObject::invokeMethod(
                 helper,
@@ -495,6 +542,11 @@ QJsonObject insertSceneImage(const QJsonObject &request)
         {"coordinateSpace", coordinateSpace},
         {"x", x},
         {"y", y},
+        {"geometry", geometry},
+        {"scenePosition", QJsonObject{
+            {"x", coordinateSpace == "normalized" ? geometry.value("bounds").toObject().value("x").toDouble() + x * geometry.value("bounds").toObject().value("width").toDouble() : x},
+            {"y", coordinateSpace == "normalized" ? geometry.value("bounds").toObject().value("y").toDouble() + y * geometry.value("bounds").toObject().value("height").toDouble() : y},
+        }},
         {"sourceWidth", image.width()},
         {"sourceHeight", image.height()},
         {"warning", "the native image item is inserted asynchronously and can be resized with xochitl's selection tool"},
@@ -953,9 +1005,12 @@ QJsonObject capabilities()
 {
     QSize canvas;
     bool controllerFound = false;
+    QJsonObject geometry;
     runOnGuiSync([&]() {
         canvas = activeCanvasSize();
-        controllerFound = findActivePage().controller != nullptr;
+        const ActivePageContext context = findActivePage();
+        controllerFound = context.controller != nullptr;
+        geometry = nativePageGeometry(context.controller);
     });
 
     return {
@@ -963,6 +1018,7 @@ QJsonObject capabilities()
         {"apiVersion", 1},
         {"maxBrokerRequestBytes", 1024},
         {"currentPageAvailable", controllerFound},
+        {"scenePage", geometry},
         {"canvas", QJsonObject{{"width", canvas.width()}, {"height", canvas.height()}}},
         {"currentPage", QJsonObject{
             {"text", "typed-text"},
